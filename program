@@ -1,0 +1,798 @@
+/* 
+ * File: ThesisProgram.cpp
+ * ---------------------
+ * Program code developed by Eric Dunn, Stanford University, 2013. 
+ */
+
+#include <ctype.h>
+#include <iostream>
+#include <string>
+#include "console.h"
+#include <vector>
+#include "vector.h"
+#include "lexicon.h"
+#include "simpio.h"
+#include "strlib.h"
+#include "tokenscanner.h"
+using namespace std;
+
+/*     */
+const int FILE_NUM = 72;
+const string YEAR = "2007";
+
+struct citation {
+  int startPage;
+	int endPage;
+	string petitioner;
+	string respondent;
+	string author;
+	citation *next;
+};
+
+
+// *** Functions *** //
+void welcomeMessage();
+void buildPrintTable(string key, Map<string, Map<string, int>> & printTable);
+
+/** Read-in library from excel spreadsheet **/ // -- works like a charm here
+void buildLibrary(string filename, Map<string,citation *> & cases);
+string promptUserForFile(ifstream & infile, string prompt);
+string getJustice(string line);
+bool containsNum(string line);
+string getNumber(string line);
+
+/** Get citations from a loaded in document **/
+void userInput(ifstream & infile, string & file);
+void fileReader (ifstream & infile, string filename, Map<string,citation *> & cases, Map<string, int> & countTable);
+void digDeep(string filename, Lexicon & observed, Map<string,citation *> & cases, Map<string, int> & countTable);
+bool allNum(string str);
+
+/** Based on citations, count how many times each Justice has been cited**/
+void buildCountTable(Map<string, int> & countTable);
+void fillCountTable(string caseName, Map<string,citation *> & cases,  Map<string, int> & countTable);
+citation* matchCitation(string line, Map<string,citation *> & library);
+citation* returnCit(citation* node, int pageValue);
+
+/** Write results to file and save**/
+string getFileName(int counter, bool petitioner);
+void writeFile(Map<string, Map<string, int>> & printTable);
+
+/**Utility Functions**/
+bool ignoreCompare (string s1, string s2);
+bool noSymbols(string str);
+Vector<string> getWords(string line, int position);
+bool matchVectors(bool largeRespondent, Vector<string> respondent, Vector<string> & nextWords);
+
+/* Function: Main()
+ * Description: The program declares variables used throughout the program, allows the user to set a variety of variables,
+ * and then loads a file, tracks the characters used, and writes random text. 
+*/
+ 
+int main() {
+    //declare variables
+	 welcomeMessage();
+	 string line = "";
+	 bool hasLib = false;
+	 Map<string, Map<string, int>> printTable; //This is the table that will be printed, a case named linked to a count table
+	 Map<string,citation *> cases;
+	
+	 while(true){
+		 while(toUpperCase(line) != "RUN"){
+			 line = getLine("-> ");
+			TokenScanner scanner(line);
+			string command = scanner.nextToken();
+			if (toUpperCase(command) == "LOAD"){
+				scanner.nextToken();
+				command = scanner.nextToken();
+				if (toUpperCase(command) == "LIBRARY"){
+					//load in library
+					scanner.nextToken();
+					string library = scanner.nextToken();
+					library += scanner.nextToken();
+					library += scanner.nextToken();
+					buildLibrary(library, cases);
+					hasLib = true;
+					cout << "Library loaded" << endl;
+				} else if (toUpperCase(command) == "FILE"){
+					//load in file
+					scanner.nextToken();
+					string load = scanner.nextToken();
+					while(scanner.hasMoreTokens()){
+						load += scanner.nextToken();
+					}
+					buildPrintTable(load, printTable);
+				}else if (toUpperCase(command) == "DOCKET"){
+					//load in docket format: -> LOAD DOCKET YEAR MAX
+					scanner.nextToken();
+					string year = scanner.nextToken();
+					scanner.nextToken();
+					string max = scanner.nextToken();
+					if (allNum(max)){
+						int maxI = stringToInteger(max);
+						for (int i = 1; i < maxI+1; i ++){
+							string docketID = year;
+							docketID += "_";
+							if (i >= 10){
+								docketID += "0";
+								docketID += integerToString(i);
+								if (i>=100){
+									docketID += integerToString(i);
+								}
+							} else {
+								docketID += "00";
+								docketID += integerToString(i);
+							}
+							string pet = docketID;
+							string res = docketID;
+							pet += "_1";
+							res += "_2";
+							string input = pet;
+							input += ".txt";
+							buildPrintTable(input, printTable);
+							input = res;
+							input += ".txt";
+							buildPrintTable(input, printTable);
+						}
+					}
+					
+				} else if (toUpperCase(command) == "ITERATOR"){
+					//load in files, via an iterator
+					scanner.nextToken();
+					string current = scanner.nextToken();
+					string root = current;
+					while(current != " "){
+						current = scanner.nextToken();
+						if (current != " ") root += current;
+					}
+					string iterator = scanner.nextToken();
+					if (allNum(iterator)){
+						int maxI = stringToInteger(iterator);
+						for (int i = 1; i < maxI+1; i ++){
+							string input = root;
+							input += integerToString(i);
+							input += ".txt";
+							buildPrintTable(input, printTable);
+						}
+					}else {
+						cout << "Incorrect Iterator format, not recognized integer" << endl;
+					} 
+				}
+			} else if (toUpperCase(command) == "H"){
+				scanner.nextToken();
+				command = scanner.nextToken();
+				if (toUpperCase(command) == "LOAD"){
+					cout << "*************************************************" << endl;
+					cout << "With the load function, you can load either a LIBRARY or a FILE (a document to  be analyzed). The format for loading is the same for either type." << endl;
+					cout << "Type the command (LOAD) followed by a space and then the name of the file you   wanted to load, including the .txt file extension." << endl;
+					cout << "*************************************************" << endl;
+					cout << "Example: -> LOAD LIBRARY library.txt" << endl;
+					cout << "Example: -> LOAD FILE test.txt" << endl;
+					cout << "*************************************************" << endl;
+					cout << "" << endl;
+					cout << "LOAD also allows for loading several files at once, as long as all the files    have the same root in common and incriment in name by 1." << endl;
+					cout << "*************************************************" << endl;
+					cout << "Example: -> LOAD ITERATOR root 15" << endl;
+					cout << "*************************************************" << endl;
+					cout << "This will load files named root1.txt, root2.txt, root3.txt (notice the root     does not include the .txt extension) up until root15." << endl;
+					cout << "Using an ITERATOR is the easiest way to load in large amounts of files to be    analyzed at once." << endl;
+				}
+			}else if (toUpperCase(command) == "LIST"){
+				cout << "******************************************************************************" << endl;
+				cout << " H	//	Type H and a command to load a detailed description." << endl;
+				cout << "******************************************************************************" << endl;
+				cout << " LOAD	//	Load a .txt file as either a library or document." << endl;
+				cout << "******************************************************************************" << endl;
+				cout << " CLEAR	//	Deletes the contents of memory (any loaded library and files)" << endl;
+				cout << "******************************************************************************" << endl;
+				cout << " RUN	//	Once you have loaded a library and file(s), run the operation." << endl;
+				cout << "******************************************************************************" << endl;
+			}else if (toUpperCase(command) == "CLEAR"){
+				printTable.clear();
+				cases.clear();
+			}
+			cout << "" << endl;
+		 }
+		int counter = 0;
+		foreach (string key in printTable){
+			ifstream infile;
+			infile.open(key.c_str());
+			if (!infile.fail()){
+				fileReader (infile, key, cases, printTable[key]);
+				counter ++;
+				cout << counter;
+				cout << " files processed." << endl;
+			} else {
+				infile.clear();
+				printTable.remove(key);
+			}
+		}
+		writeFile(printTable);
+		cout << "Requested operations have been completed." << endl;
+		cout << "" << endl;
+		line = "";
+	}
+    return 0;
+}
+
+void buildPrintTable(string key, Map<string, Map<string, int>> & printTable){
+	Map<string, int> countTable;
+	buildCountTable(countTable);
+	printTable.put(key, countTable);
+}
+ 
+/* 
+Function: welcomeMessage()
+*/
+ 
+void welcomeMessage() {
+    cout << "Welcome to the Thesis Program Suite" << endl;
+	cout << "This program is for personal use, copyright @Eric Dunn 2012" << endl;
+	cout << " " << endl;
+	cout << " " << endl;
+	cout << "7/17 Version 4.0: Distance Implementation." << endl;
+	cout << " " << endl;
+	cout << " " << endl;
+}
+ 
+
+void buildCountTable(Map<string, int> & countTable){
+	countTable.put("WHRehnquist", 0);
+	countTable.put("JPStevens", 0);
+	countTable.put("SDOConnor", 0);
+	countTable.put("AScalia", 0);
+	countTable.put("AMKennedy", 0);
+	countTable.put("DHSouter", 0);
+	countTable.put("CThomas", 0);
+	countTable.put("RBGinsburg", 0);
+	countTable.put("SGBreyer", 0);
+	countTable.put("JGRoberts", 0);
+	countTable.put("SAAlito", 0);
+	countTable.put("NA", 0);
+}
+
+
+/*
+Function: buildLibrary
+Usage: void buildLibrary(Map<string,citation *> & cases)
+Description:
+Loads in an excel spreadsheet that is formatted consistent with the library file, which stores US Supreme Court cases from 1942.
+
+### U.S. ###  ###
+	 |          |
+	 ^          ^
+ US cite ID   Justice ID 
+
+ The function fills a map by matching the volume number (the first set of numbers in a US citation) to a pointer to a citation.
+ This pointer stores information for the first case in the volume. That pointer contains information about the case, and a pointer
+ to the next case in the volume. 
+*/
+
+void buildLibrary(string filename, Map<string,citation *> & cases){
+	ifstream stream;
+	promptUserForFile(stream, filename);
+	string key = "";
+	string line;
+	while (getline(stream, line) != 0){
+		TokenScanner scanner(line);
+		key = scanner.nextToken();
+		if (!cases.containsKey(key)){
+			citation *firstCit = new citation;
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			firstCit->startPage = stringToInteger(scanner.nextToken());
+			firstCit->next = NULL;
+			scanner.nextToken();
+			string current = "";
+			
+			//I want to make it into just a string. So here you just find v. and then work backwards and forwards
+			string petitioner;
+			string respondent;
+			while(current!="v"){
+				petitioner += current;
+				current = scanner.nextToken();
+			}
+		
+			firstCit->petitioner = petitioner;
+			scanner.nextToken(); //get rid of period
+			current = "";
+			while(scanner.hasMoreTokens()){
+				respondent += scanner.nextToken();
+			}
+			firstCit->author=getJustice(respondent);
+			firstCit->respondent = respondent;
+			cases.put(key, firstCit);
+		} else {
+			citation *current = cases[key];
+			while(current->next != NULL){
+				current = current->next;
+			}
+			citation *nextCit = new citation;
+			current->next = nextCit;
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			nextCit->startPage = stringToInteger(scanner.nextToken());
+			nextCit->next = NULL;
+			scanner.nextToken();
+
+			string token = "";
+			//scanner.nextToken();
+			string petitioner;
+			string respondent;
+			while(token!="v"){
+				petitioner += token;
+				token = scanner.nextToken();
+			}
+			
+			nextCit->petitioner = petitioner; 
+			scanner.nextToken(); //get rid of period
+			token = "";
+			while(scanner.hasMoreTokens()){
+				respondent += scanner.nextToken();
+			}
+			nextCit->author=getJustice(respondent);
+			nextCit->respondent = respondent;
+			//cases.put(key, nextCit);
+		}
+	}
+}
+
+/*
+Function: getJustice
+Usage: string getJustice(string line)
+Description: Gets the name of the justice who wrote the case's majority opinion, based on Justice ID numbers consistent with
+ID numbers from the Supreme Court database. 
+*/
+
+string getJustice(string line){
+	if (!containsNum(line)) return "NA";
+	return getNumber(line);
+}
+
+/*
+Function: containsNum
+Usage: bool containsNum(string line)
+Description: ContainsNum and getNumber are helper methods for getJustice. They see if a line contains a number,
+and if it does they check to see whether the number at the end of the line matches a Justice code.
+*/
+bool containsNum(string line){
+	for(int i = 0; i < line.size(); i++){
+		int test = i;
+		if(isdigit(line[i])) return true;
+	}
+	return false;
+}
+
+/*
+Function: getNumber
+Usage: string getNumber(string line)
+Description: ContainsNum and getNumber are helper methods for getJustice. They see if a line contains a number,
+and if it does they check to see whether the number at the end of the line matches a Justice code.
+*/
+
+string getNumber(string line){
+	if (endsWith(line, "101")) return "WHRehnquist";
+	if (endsWith(line, "102")) return "JPStevens";
+	if (endsWith(line, "103")) return "SDOConnor";
+	if (endsWith(line, "104")) return "AScalia";
+	if (endsWith(line, "105")) return "AMKennedy";
+	if (endsWith(line, "106")) return "DHSouter";
+	if (endsWith(line, "107")) return "CThomas";
+	if (endsWith(line, "108")) return "RBGinsburg";
+	if (endsWith(line, "109")) return "SGBreyer";
+	if (endsWith(line, "110")) return "JGRoberts";
+	if (endsWith(line, "111")) return "SAAlito";
+	return "NA";
+}
+
+/* Function: userInput(ifstream & infile, string & file)
+ * Description: Allows the user to enter the file to be loaded.
+*/
+ 
+void userInput(ifstream & infile, string & file){
+    file = promptUserForFile(infile, "Input file: ");
+}
+ 
+/* Function: promptUserForFile ((ifstream & infile, string text)
+ * Description: Prompts the user to input the name of a file. It attempts to load the file once the user clicks enter,
+ * if the file is able to load the program moves on. If the load fails, the function asks the user
+ * for another filename. 
+*/
+ 
+string promptUserForFile(ifstream & infile, string filename) {
+    while (true) {
+        infile.open(filename.c_str());
+        if (!infile.fail()) return filename;
+        infile.clear();
+        cout << "Unable to open that file. Try again." << endl;
+		filename = getLine("filename :: ");
+    }
+}
+
+/*
+Function: fileReader
+Usage: void fileReader (ifstream & infile, Map<string, int> & mapset)
+Description: Given a file, it reads through the file and pulls out citations and then stores them in a mapset
+that counts how many times each case has been cited. The functionality in 4.0 uses two approaches to finding
+new citations. First, citations are definite if the US cite number appears. After that process is completed for 
+a case the program reads in any "##### v. #####" pattern to try to match it.
+*/
+
+void fileReader (ifstream & infile, string filename, Map<string,citation *> & cases, Map<string, int> & countTable){
+	//Map<string, string> observed; 
+	Lexicon observedCases; 
+	//one thought is you have two maps, and you find the most likely P and most likely R and see if respective match
+	string book = "";
+	int bookNum = 0;
+	string cite = "";
+	int citeNum = 0;
+	string line = "";
+	string saveBook = "";
+	bool needNextLine = false;
+
+
+	while (getline(infile, line) != 0){
+		//cout << line << endl;
+		book = "";
+		if (needNextLine == true){
+			if (line != ""){
+				if (isdigit(line[0])) cite += line[0]; 
+				if (!isspace(line[1]) && isdigit(line[1])) cite += line[1];
+				if (!isspace(line[2]) && isdigit(line[2])) cite += line[2];
+					string key = saveBook;
+					key += " U.S. ";
+					key += cite;
+					fillCountTable(key, cases, countTable);
+					cite = "";
+					saveBook = "";
+					needNextLine = false;
+			}
+		}
+		for (int i = 0; i < line.length(); i++){
+			book = "";
+			if (!isascii(line[i])) i++;
+
+			//if (line[i] == '\u00A7') i++;
+			if (i-5 > 0 && i+7 < line.length()){
+				if(noSymbols(line.substr(i-5, 12))){
+					if (line[i] == 'U' && line[i+1] == '.'){
+						if (line[i+2] == 'S' && line[i+3] == '.'){
+							if (isascii(line[i-5]) && isascii(line[i+4])){
+								if (isspace(line[i-5]) & isspace(line[i+4])){ 
+									//we have a "U.S. "citing" (lame humor)
+									book += line[i-4];
+									book += line[i-3];
+									book += line[i-2];
+									if (allNum(book.substr(book.length() - 3))){
+										bookNum=stringToInteger(book);
+			
+										//let's try to grab the cite number, at 5 or 5 and 6 or 5 and 6 and 7
+										cite += line[i+5];
+										if (!isspace(line[i+6])){
+											cite += line[i+6];
+											if (!isspace(line[i+7])){ 
+												cite += line[i+7];
+											}
+										}
+										if (cite == "at"){
+											//in case the number comes after the word "at", as it often does
+											//if the citation here is an at, it needs to check if endl
+											cite = "";
+											//if (){
+											if (i+8 < line.length()){
+												if (isdigit(line[i+8])) cite += line[i+8]; //10 and 11
+												if (i+9 < line.length()){
+													if (!isspace(line[i+9])){
+														if (isdigit(line[i+9])) cite += line[i+9];
+														if (!isspace(line[i+10])) {
+															if (isdigit(line[i+10])) cite += line[i+10];
+														}
+													}
+												} else {
+													cite = "";
+													//book = "";
+													saveBook = book;
+													book = "";
+													needNextLine = true;
+													//check next line because num is out of range
+												}
+											} else {
+												cite = "";
+												//book = "";
+												saveBook = book;
+												book = "";
+												needNextLine = true;
+												//look to next line for the cite
+											}
+										} 
+										if (!allNum(cite)){
+											//in case a number is obscured by a paren or a comma
+											string temp = "";
+											bool stop = false;
+											for (int i = 0; i<cite.length(); i++){
+												if (isdigit(cite[i]) && stop == false){
+													temp += cite[i];
+												} else{
+													stop = true;
+												}
+											}
+											cite = temp;
+										}
+										if (allNum(cite) & cite != ""){
+											citeNum=stringToInteger(cite);
+											cite = "";
+											string key = integerToString(bookNum);
+											key += " U.S. ";
+											key += integerToString(citeNum);
+											fillCountTable(key, cases, countTable);
+											//citation *current = matchCitation(key, cases);
+											//if (current != NULL) observed.put(current->petitioner, current->respondent);
+											if (matchCitation(key, cases) != NULL) observedCases.add(key);
+											//citation *current = matchCitation(key, cases);
+											//string petitioner = current->petitioner;
+											//string respondent = current->respondent;
+											//observedP.put(petitioner, respondent);
+											//observedR.put(respondent, petitioner); 
+											//This is where we could build a table of all files we know are in the case
+										} else {
+											cite = "";
+										}
+									} else {
+										book = "";
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	//here run a method that rechecks the document, just checking to see if things match the observed cases
+	digDeep(filename, observedCases, cases, countTable);
+
+}
+
+bool ignoreCompare (string s1, string s2){
+	for (int i = 0; i < s1.length(); i++){
+		if (tolower(s1[i]) != tolower(s2[i])) return false;
+	}
+	return true;
+}
+
+/*
+Function: digDeep
+Description: Does a second pass through the document, trying to match case fragments that don't include a full cite
+to cases it knows are contained in the document already. 
+*/
+
+void digDeep(string filename, Lexicon & observed, Map<string,citation *> & cases, Map<string, int> & countTable){
+	foreach(string key in observed){
+		citation *current = matchCitation(key, cases);
+		TokenScanner petitioner(current->petitioner);
+		Vector<string> sterms;
+		while(petitioner.hasMoreTokens()){
+			sterms.add(petitioner.nextToken());
+		}
+		string line = "";
+		ifstream infile;
+		infile.open(filename.c_str());
+		while (getline(infile, line) != 0){
+			//cout << line << endl;
+			for (int i = 0; i < line.length(); i++){
+				if (!isascii(line[i])) i++;
+				if (tolower(line[i]) == tolower(sterms[0][0])){
+					bool match = true;
+					//
+					int count = i;
+					while(true){
+						for(int term = 0; term < sterms.size(); term++){
+							for(int pos = 0; pos < sterms[term].length(); pos++){
+								if (tolower(line[count]) != tolower(sterms[term][pos])) match = false;
+								//cout << line[count];
+								//cout << " ";
+								//cout << sterms[term][pos] << endl;
+								if (match == false) break;
+								count ++;
+							}
+							if (match == false) break;
+						}
+						break;
+					}
+					if (match == true){
+						string respondent = current->respondent;
+						TokenScanner respondentScanner(respondent);
+						Vector<string> rterms;
+						while(respondentScanner.hasMoreTokens()){
+							rterms.add(respondentScanner.nextToken());
+						}
+						bool largeRespondent = false;
+						if (rterms.size() > 1) largeRespondent = true;
+						//given some line and starting position, grab the next five words
+						Vector<string> nextWords = getWords(line, count);
+						bool matchingV = matchVectors(largeRespondent, rterms, nextWords);
+						if (matchingV){
+							fillCountTable(key, cases, countTable);
+							//considering that a KEY matches a line, we'll add another plus for the key in cases somehow
+
+						}
+					}
+				}
+
+			}
+		}
+	}
+
+
+}
+
+bool matchVectors(bool largeRespondent, Vector<string> respondent, Vector<string> & nextWords){
+	int matches = 0;
+	for(int respondentCount = 0; respondentCount < respondent.size(); respondentCount ++){
+		for(int nextWordsCount = 0; nextWordsCount < nextWords.size(); nextWordsCount ++){
+			if (ignoreCompare(respondent[respondentCount], nextWords[nextWordsCount])){
+				matches ++;
+			}
+		}
+	}
+	if (largeRespondent == true && matches > 1) return true;
+	if (largeRespondent == false && matches > 0) return true;
+	return false;
+}
+
+Vector<string> getWords(string line, int position){
+	//get the next five words
+	Vector<string> resultVector;
+	string result = "";
+	for(int i = 0; i < line.length()-1; i++){
+		if ((i + position) > line.length()-1) return resultVector;
+		while(!isascii(line[position + i])){
+			i++;
+		}
+		//if (!isascii(line[position + i])) i++;
+		if (isspace(line[position + i])){
+			if (resultVector.size() > 4) return resultVector;
+			resultVector.add(result);
+			result = "";
+		} else{
+			result += line[position + i];
+		}	
+	}
+}
+/*
+Function: allNum
+Description: Returns true if and only if a string contains only numbers.
+*/
+
+bool allNum(string str){
+	for(int i = 0; i < str.size(); i++){
+		if(!isdigit(str[i])) return false;
+	}
+	return true;
+}
+
+bool noSymbols(string str){
+	for(int i = 0; i<str.length(); i++){
+		if (str[i] == '\u00A7') return false;
+	}
+	return true;
+}
+
+
+/*
+Function: matchCitation
+Description: Given a library of cases mapped by volume number it takes a string in standard US format:
+
+### U.S. ### (periods included)
+
+The function returns the citation.
+*/
+
+citation* matchCitation(string line, Map<string,citation *> & library){
+		TokenScanner scanner(line);
+		string key = scanner.nextToken();
+		if(library.containsKey(key)){
+			citation *current = library[key];
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			scanner.nextToken();
+			int page = stringToInteger(scanner.nextToken());
+			return returnCit(current, page);
+		} else{
+			return NULL;
+		}
+}
+
+/*
+Function: returnCit
+Description: The function starts with a given node and page number of a case. If the page number is greater than or equal to the 
+current node's stored page value and is less than the next node's page value, then the current node matches the case. If not,
+the function recursively calls itself until this is true for one of the nodes.
+
+Basically the function walks through the volume and checks to see whether the page number of a case given to the function
+could match the current case. Eventually, when it matches the page number to a known case it returns the citation. 
+*/
+
+citation* returnCit(citation* node, int pageValue){
+	if (pageValue == node->startPage) return node;
+	if (node->next == NULL) return node;
+	if (pageValue < node->next->startPage) return node;
+
+	return returnCit(node->next, pageValue);
+
+}
+
+void fillCountTable(string caseName, Map<string,citation *> & cases,  Map<string, int> & countTable){
+	citation *current = matchCitation(caseName, cases);
+	if (current != NULL){
+		if (countTable.containsKey(current->author)){
+			int temp = countTable[current->author];
+			temp ++;
+			countTable[current->author] = temp;
+		} else {
+			countTable.put(current->author, 1);
+		}
+	}
+}
+
+void writeFile(Map<string, Map<string, int>> & printTable){
+	ofstream myfile;
+	myfile.open ("data.txt");
+	foreach(string key in printTable){
+		myfile << key.substr(0, key.length() - 4);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["WHRehnquist"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["JPStevens"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["SDOConnor"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["AScalia"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["AMKennedy"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["DHSouter"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["CThomas"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["RBGinsburg"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["SGBreyer"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["JGRoberts"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["SAAlito"]);
+		myfile << " ";
+		myfile << integerToString(printTable[key]["NA"]);
+		myfile << " ";
+		myfile << "\n";
+	}
+}
+
+string getFileName(int counter, bool petitioner){
+	string caseNum = integerToString(counter);
+	string party;
+	if (caseNum.length() == 1){
+		caseNum = "00" + caseNum;
+	} else if (caseNum.length() == 2){
+		caseNum = "0" + caseNum;
+	}
+	if (petitioner == true){
+		party = "1";
+	} else {
+		party = "2";
+	}
+	string file = YEAR + "_" + caseNum + "_" + party;
+	file += ".txt";
+	return file;
+}
